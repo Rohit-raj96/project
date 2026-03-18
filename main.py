@@ -1,5 +1,4 @@
 import json
-import os
 import shutil
 import warnings
 from pathlib import Path
@@ -10,6 +9,7 @@ warnings.filterwarnings("ignore")
 import pytesseract
 from dotenv import load_dotenv
 
+from config_utils import read_setting
 from file_detector import detect_file_type
 from pdf_text_extractor import extract_from_text_pdf
 from ocr_extractor import extract_from_image, extract_from_scanned_pdf
@@ -31,8 +31,8 @@ def load_runtime_environment() -> None:
 def get_runtime_settings() -> dict[str, str | bool | None]:
     load_runtime_environment()
 
-    tesseract_cmd = os.getenv("TESSERACT_CMD", "").strip() or None
-    poppler_path = os.getenv("POPPLER_PATH", "").strip() or None
+    tesseract_cmd = read_setting("TESSERACT_CMD")
+    poppler_path = read_setting("POPPLER_PATH")
     tesseract_on_path = shutil.which("tesseract")
 
     return {
@@ -160,8 +160,16 @@ def process_text_pdf(file_path: Path) -> dict:
     return extract_from_text_pdf(str(file_path))
 
 
-def process_scanned_pdf(file_path: Path) -> dict:
-    raw_text = extract_from_scanned_pdf(str(file_path))
+def process_scanned_pdf(
+    file_path: Path,
+    poppler_path: str | None = None,
+    page_numbers: list[int] | None = None,
+) -> dict:
+    raw_text = extract_from_scanned_pdf(
+        str(file_path),
+        poppler_path=poppler_path,
+        page_numbers=page_numbers,
+    )
     return {
         "raw_text": raw_text,
         "raw_tables": [],
@@ -176,7 +184,7 @@ def process_image(file_path: Path) -> dict:
     }
 
 
-def process_mixed_pdf(file_path: Path, detected: dict) -> dict:
+def process_mixed_pdf(file_path: Path, detected: dict, poppler_path: str | None = None) -> dict:
     """
     Hybrid strategy:
     - run text extractor once for the whole PDF
@@ -194,7 +202,11 @@ def process_mixed_pdf(file_path: Path, detected: dict) -> dict:
         text_result = process_text_pdf(file_path)
 
     if scanned_page_nums:
-        ocr_result = process_scanned_pdf(file_path)
+        ocr_result = process_scanned_pdf(
+            file_path,
+            poppler_path=poppler_path,
+            page_numbers=sorted(scanned_page_nums),
+        )
 
     merged_pages = []
 
@@ -224,7 +236,7 @@ def process_mixed_pdf(file_path: Path, detected: dict) -> dict:
 
 
 def process_file(file_path: Path) -> dict:
-    configure_ocr_runtime()
+    runtime_settings = configure_ocr_runtime()
     errors = []
 
     detected = detect_file_type(str(file_path))
@@ -250,10 +262,17 @@ def process_file(file_path: Path) -> dict:
             extraction_result = process_text_pdf(file_path)
 
         elif file_type == "scanned_pdf":
-            extraction_result = process_scanned_pdf(file_path)
+            extraction_result = process_scanned_pdf(
+                file_path,
+                poppler_path=runtime_settings["poppler_path"],
+            )
 
         elif file_type == "mixed_pdf":
-            extraction_result = process_mixed_pdf(file_path, detected)
+            extraction_result = process_mixed_pdf(
+                file_path,
+                detected,
+                poppler_path=runtime_settings["poppler_path"],
+            )
 
         elif file_type == "image":
             extraction_result = process_image(file_path)

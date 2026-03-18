@@ -3,7 +3,7 @@ __pycache__/
 *.pyc
 .venv/
 venv/
-.streamlit/
+.streamlit/secrets.toml
 *.log
 output/
 dataset/

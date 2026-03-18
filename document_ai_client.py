@@ -1,4 +1,3 @@
-import os
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -6,6 +5,7 @@ from google.api_core.client_options import ClientOptions
 from google.cloud import documentai
 from dotenv import load_dotenv
 
+from config_utils import read_setting
 
 ENV_FILE = Path(__file__).resolve().with_name(".env")
 
@@ -37,16 +37,24 @@ def load_settings() -> DocumentAISettings:
     load_environment()
 
     env_mapping = {
-        "project_id": "DOCUMENT_AI_PROJECT_ID",
-        "location": "DOCUMENT_AI_LOCATION",
-        "processor_id": "DOCUMENT_AI_PROCESSOR_ID",
+        "project_id": ("PROJECT_ID", "DOCUMENT_AI_PROJECT_ID"),
+        "location": ("REGION", "DOCUMENT_AI_LOCATION"),
+        "processor_id": ("PROCESSOR_ID", "DOCUMENT_AI_PROCESSOR_ID"),
     }
-    values = {field: os.getenv(env_var, "").strip() for field, env_var in env_mapping.items()}
-    missing = [env_var for field, env_var in env_mapping.items() if not values[field]]
+    values = {field: read_setting(*keys) or "" for field, keys in env_mapping.items()}
+    missing = [
+        "PROJECT_ID or DOCUMENT_AI_PROJECT_ID"
+        for field in ("project_id",)
+        if not values[field]
+    ]
+    if not values["location"]:
+        missing.append("REGION or DOCUMENT_AI_LOCATION")
+    if not values["processor_id"]:
+        missing.append("PROCESSOR_ID or DOCUMENT_AI_PROCESSOR_ID")
 
     if missing:
         raise EnvironmentError(
-            "Missing required environment variables: " + ", ".join(sorted(missing))
+            "Missing required Streamlit secrets or environment variables: " + ", ".join(missing)
         )
 
     return DocumentAISettings(**values)

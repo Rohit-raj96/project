@@ -1,3 +1,4 @@
+import hashlib
 import json
 import warnings
 from pathlib import Path
@@ -43,6 +44,11 @@ def detect_mime_type(file_name: str, streamlit_mime_type: str | None) -> str:
 
 def build_download_name(file_name: str, suffix: str) -> str:
     return f"{Path(file_name).stem}{suffix}"
+
+
+def build_upload_token(file_name: str, file_bytes: bytes) -> str:
+    digest = hashlib.sha1(file_bytes).hexdigest()[:12]
+    return f"{Path(file_name).name}:{digest}"
 
 
 def collect_local_full_text(result: dict[str, Any]) -> str:
@@ -143,8 +149,11 @@ def render_runtime_status() -> None:
     poppler_path = runtime_settings["poppler_path"]
     if poppler_path:
         st.sidebar.write(f"Poppler path: `{poppler_path}`")
+        st.sidebar.caption("Poppler is used only when a scanned PDF page must be converted into an image before OCR.")
     else:
-        st.sidebar.info("Poppler is optional unless you process scanned PDFs.")
+        st.sidebar.info("Poppler is only needed for scanned PDFs or scanned pages inside mixed PDFs. Digital text PDFs do not use it.")
+
+    st.sidebar.caption("Scanned PDFs are slower in local mode because each scanned page is converted to an image and OCR is tried multiple ways.")
 
     if runtime_settings["env_file"]:
         st.sidebar.write(f"Loaded `.env`: `{runtime_settings['env_file']}`")
@@ -161,13 +170,13 @@ def render_document_ai_status() -> None:
         st.sidebar.code(
             "\n".join(
                 [
-                    "Required cloud variables:",
-                    "DOCUMENT_AI_PROJECT_ID",
-                    "DOCUMENT_AI_LOCATION",
-                    "DOCUMENT_AI_PROCESSOR_ID",
+                    "Required cloud settings:",
+                    "PROJECT_ID or DOCUMENT_AI_PROJECT_ID",
+                    "REGION or DOCUMENT_AI_LOCATION",
+                    "PROCESSOR_ID or DOCUMENT_AI_PROCESSOR_ID",
                     "",
                     "Authentication:",
-                    "GOOGLE_APPLICATION_CREDENTIALS or other ADC",
+                    "Google ADC or credentials configured for the runtime",
                 ]
             )
         )
@@ -184,22 +193,25 @@ def render_loaded_settings(settings: DocumentAISettings) -> None:
 
 
 def process_local_mode(uploaded_file: Any) -> None:
+    file_bytes = uploaded_file.getvalue()
     with st.spinner("Running the local OCR pipeline..."):
-        result = process_local_upload(uploaded_file.name, uploaded_file.getvalue())
+        result = process_local_upload(uploaded_file.name, file_bytes)
 
     original_json = serialize_result(result)
     st.session_state["local_result"] = result
     st.session_state["local_file_name"] = uploaded_file.name
+    st.session_state["local_result_token"] = build_upload_token(uploaded_file.name, file_bytes)
     st.session_state["local_original_json"] = original_json
     st.session_state["local_editable_json"] = original_json
 
 
 def process_cloud_mode(uploaded_file: Any) -> None:
     client = get_document_ai_client()
+    file_bytes = uploaded_file.getvalue()
     mime_type = detect_mime_type(uploaded_file.name, uploaded_file.type)
 
     with st.spinner("Sending document to Google Document AI..."):
-        document = client.process_document(uploaded_file.getvalue(), mime_type)
+        document = client.process_document(file_bytes, mime_type)
 
     raw_json = document_to_json(document)
     st.session_state["cloud_result"] = {
@@ -209,6 +221,7 @@ def process_cloud_mode(uploaded_file: Any) -> None:
         "form_fields": extract_form_fields(document),
         "raw_json": raw_json,
     }
+    st.session_state["cloud_result_token"] = build_upload_token(uploaded_file.name, file_bytes)
     st.session_state["cloud_original_json"] = raw_json
     st.session_state["cloud_editable_json"] = raw_json
 
@@ -243,15 +256,15 @@ def render_local_overview(result: dict[str, Any]) -> None:
 
     if summary:
         st.write("Summary")
-        st.dataframe(pd.DataFrame([summary]), use_container_width=True)
+        st.dataframe(pd.DataFrame([summary]), width="stretch")
 
     if deposits:
         st.write("Deposits")
-        st.dataframe(pd.DataFrame(deposits), use_container_width=True)
+        st.dataframe(pd.DataFrame(deposits), width="stretch")
 
     if fees:
         st.write("Fees")
-        st.dataframe(pd.DataFrame(fees), use_container_width=True)
+        st.dataframe(pd.DataFrame(fees), width="stretch")
 
     if validation:
         st.write("Validation")
@@ -259,10 +272,10 @@ def render_local_overview(result: dict[str, Any]) -> None:
 
     if review_flags:
         st.write("Review flags")
-        st.dataframe(pd.DataFrame(review_flags), use_container_width=True)
+        st.dataframe(pd.DataFrame(review_flags), width="stretch")
 
 
-def render_local_pages(result: dict[str, Any]) -> None:
+def render_local_pages(result: dict[str, Any], result_token: str) -> None:
     pages = (result.get("raw_text", {}) or {}).get("pages", [])
     if not pages:
         st.info("No page-level text was extracted.")
@@ -276,7 +289,7 @@ def render_local_pages(result: dict[str, Any]) -> None:
                 value=page.get("text", ""),
                 height=260,
                 disabled=True,
-                key=f"local_page_{page_number}",
+                key=f"local_page_{result_token}_{page_number}",
             )
 
 
@@ -309,7 +322,7 @@ def render_local_tables(result: dict[str, Any]) -> None:
                 if dataframe.empty:
                     st.info("This table has no row data.")
                 else:
-                    st.dataframe(dataframe, use_container_width=True)
+                    st.dataframe(dataframe, width="stretch")
 
     with raw_tab:
         if not raw_tables:
@@ -329,7 +342,7 @@ def render_local_tables(result: dict[str, Any]) -> None:
                 if dataframe.empty:
                     st.info("This table has no row data.")
                 else:
-                    st.dataframe(dataframe, use_container_width=True)
+                    st.dataframe(dataframe, width="stretch")
 
 
 def render_local_results() -> None:
@@ -338,6 +351,7 @@ def render_local_results() -> None:
         return
 
     file_name = st.session_state["local_file_name"]
+    result_token = st.session_state.get("local_result_token", file_name)
     st.success(f"Local OCR processing completed for `{file_name}`.")
 
     metrics = st.columns(4)
@@ -354,7 +368,7 @@ def render_local_results() -> None:
         render_local_overview(result)
 
     with pages_tab:
-        render_local_pages(result)
+        render_local_pages(result, result_token)
 
     with tables_tab:
         render_local_tables(result)
@@ -376,7 +390,7 @@ def render_cloud_tables(tables: list[dict[str, Any]]) -> None:
     for table in tables:
         st.subheader(f"Page {table['page_number']} - Table {table['table_number']}")
         dataframe = pd.DataFrame(table["rows"], columns=table["columns"])
-        st.dataframe(dataframe, use_container_width=True)
+        st.dataframe(dataframe, width="stretch")
 
 
 def render_cloud_form_fields(form_fields: list[dict[str, Any]]) -> None:
@@ -384,7 +398,7 @@ def render_cloud_form_fields(form_fields: list[dict[str, Any]]) -> None:
         st.info("No form fields were detected in the document.")
         return
 
-    st.dataframe(pd.DataFrame(form_fields), use_container_width=True)
+    st.dataframe(pd.DataFrame(form_fields), width="stretch")
 
 
 def render_cloud_results() -> None:

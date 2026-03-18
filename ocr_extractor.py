@@ -1,4 +1,3 @@
-import os
 import re
 from pathlib import Path
 from statistics import mean
@@ -9,6 +8,7 @@ import pytesseract
 from PIL import Image
 from pdf2image import convert_from_path
 
+from config_utils import read_setting
 
 DEFAULT_TESSERACT_CONFIGS = [
     "--oem 3 --psm 6",
@@ -290,21 +290,73 @@ def extract_from_image(image_path: str) -> dict:
     }
 
 
-def extract_from_scanned_pdf(pdf_path: str, dpi: int = 300, poppler_path: str | None = None) -> dict:
-    poppler_path = poppler_path or os.getenv("POPPLER_PATH")
+def normalize_page_numbers(page_numbers: list[int] | None) -> list[int]:
+    if not page_numbers:
+        return []
 
-    images = convert_from_path(
+    normalized = []
+    for page_num in page_numbers:
+        try:
+            page_value = int(page_num)
+        except Exception:
+            continue
+
+        if page_value > 0:
+            normalized.append(page_value)
+
+    return sorted(set(normalized))
+
+
+def load_pdf_images(
+    pdf_path: str,
+    dpi: int,
+    poppler_path: str | None,
+    page_numbers: list[int] | None = None,
+) -> list[tuple[int, Image.Image]]:
+    convert_kwargs = {"dpi": dpi}
+    if poppler_path:
+        convert_kwargs["poppler_path"] = poppler_path
+
+    requested_pages = normalize_page_numbers(page_numbers)
+    if not requested_pages:
+        images = convert_from_path(pdf_path, **convert_kwargs)
+        return list(enumerate(images, start=1))
+
+    loaded_pages: list[tuple[int, Image.Image]] = []
+    for page_num in requested_pages:
+        images = convert_from_path(
+            pdf_path,
+            first_page=page_num,
+            last_page=page_num,
+            **convert_kwargs,
+        )
+        if images:
+            loaded_pages.append((page_num, images[0]))
+
+    return loaded_pages
+
+
+def extract_from_scanned_pdf(
+    pdf_path: str,
+    dpi: int = 300,
+    poppler_path: str | None = None,
+    page_numbers: list[int] | None = None,
+) -> dict:
+    poppler_path = poppler_path or read_setting("POPPLER_PATH")
+
+    page_images = load_pdf_images(
         pdf_path,
         dpi=dpi,
         poppler_path=poppler_path,
+        page_numbers=page_numbers,
     )
 
     pages = []
-    for i, pil_img in enumerate(images, start=1):
+    for page_num, pil_img in page_images:
         img_bgr = pil_to_cv(pil_img.convert("RGB"))
         variants = preprocess_for_ocr(img_bgr)
         best_ocr = run_best_ocr(variants)
-        pages.append(build_page_result(i, best_ocr, variants[0].shape))
+        pages.append(build_page_result(page_num, best_ocr, variants[0].shape))
 
     return {
         "page_count": len(pages),

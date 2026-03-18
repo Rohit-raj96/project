@@ -71,7 +71,8 @@ Copy-Item .env.example .env
 ```dotenv
 # Local OCR pipeline
 TESSERACT_CMD=C:\Program Files\Tesseract-OCR\tesseract.exe
-POPPLER_PATH=C:\path\to\poppler\Library\bin
+# Leave blank on Linux or Streamlit Cloud so poppler-utils is resolved from PATH.
+POPPLER_PATH=
 
 # Google Document AI pipeline
 DOCUMENT_AI_PROJECT_ID=your-project-id
